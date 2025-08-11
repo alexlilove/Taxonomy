@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Animal Taxonomy Explorer — Fixed</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin:0; }
+    header { padding:12px 16px; background:#0b5; color:#033; display:flex; align-items:center; gap:12px }
+    header h1 { font-size:18px; margin:0 }
+    #controls { margin-left:auto; display:flex; gap:8px; align-items:center }
+    #chart { width:100%; height: calc(100vh - 56px); }
+    .node circle { cursor: pointer; stroke:#555; stroke-width:1.2px; }
+    .node text { font-size:11px; pointer-events:none; }
+    .link { fill:none; stroke:#999; stroke-opacity:0.6; stroke-width:1.5px; }
+    .badge { font-size:11px; padding:3px 8px; border-radius:10px; background:rgba(255,255,255,0.7); }
+    input[type="search"] { padding:6px 8px; border-radius:8px; border:1px solid #ccc }
+    button { padding:6px 10px; border-radius:8px; border: none; background:#0366d6; color:white }
+    button.secondary { background: #6c757d }
+    small.hint { margin-left:12px; color:#044 }
+    #status { position: absolute; right: 12px; top: 64px; background: rgba(255,255,255,0.9); padding:8px 10px; border-radius:8px; font-size:12px; color:#023 }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Animal Taxonomy Explorer</h1>
+    <div class="badge">data: GBIF backbone via api.gbif.org</div>
+    <div id="controls">
+      <input id="search" type="search" placeholder="Search taxon name (e.g. Mammalia)" />
+      <button id="searchBtn">Find</button>
+      <button id="resetBtn" class="secondary">Reset</button>
+      <button id="demoBtn" class="secondary">Load demo</button>
+    </div>
+  </header>
+
+  <div id="chart"></div>
+  <div id="status" aria-live="polite" style="display:none"></div>
+
+  <!-- d3 v7 -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    // Robust, defensive version of the Animal Taxonomy Explorer.
+    // Fixes potential `Cannot read properties of undefined (reading '_uid')` by
+    // guarding accesses to d.data and by ensuring every node receives a stable _uid.
+
+    const GBIF_BASE = 'https://api.gbif.org/v1';
+    const ROOT_KEY = 1; // Animalia
+
+    const width = window.innerWidth;
+    const height = window.innerHeight - 56;
+    const margin = { top: 20, right: 20, bottom: 20, left: 20 };
+
+    const svg = d3.select('#chart').append('svg')
+      .attr('width', '100%')
+      .attr('height', '100%')
+      .call(d3.zoom().scaleExtent([0.5, 4]).on('zoom', (event) => {
+        g.attr('transform', event.transform);
+      }));
+
+    const g = svg.append('g').attr('transform', `translate(${margin.left + 40},${margin.top})`);
+    const tree = d3.tree().nodeSize([120, 140]);
+
+    // Root hierarchy object
+    let root = d3.hierarchy({ key: ROOT_KEY, canonicalName: 'Animalia', rank: 'KINGDOM' }, d => d.children);
+    root.x0 = height / 2;
+    root.y0 = 0;
+    root.children = null; // collapsed initially
+
+    // Status helper
+    function setStatus(text, show=true) {
+      const s = document.getElementById('status');
+      if (!s) return;
+      s.style.display = show ? 'block' : 'none';
+      s.textContent = text || '';
+    }
+
+    // Ensure a stable, safe UID for any node-like object.
+    function safeUID(d) {
+      if (!d) return 'uid_' + Math.random().toString(36).slice(2,9);
+      // If d is a d3 node, ensure d.data exists
+      if (!d.data) d.data = {};
+      if (!d.data._uid) {
+        const base = (d.data.key || d.data.name || d.data.canonicalName || d.data.scientificName || 'node') + '';
+        // sanitize base
+        const clean = base.replace(/[^a-zA-Z0-9\-_.]/g, '_').slice(0,60);
+        d.data._uid = clean + '_' + Math.random().toString(36).slice(2,9);
+      }
+      return d.data._uid;
+    }
+
+    // Safe accessor for coordinates from source; fallback to root
+    function sourceCoords(source) {
+      const s = source || root || {};
+      return {
+        x0: (s.x0 != null ? s.x0 : (root && root.x0 != null ? root.x0 : height/2)),
+        y0: (s.y0 != null ? s.y0 : (root && root.y0 != null ? root.y0 : 0)),
+        x: (s.x != null ? s.x : (root && root.x != null ? root.x : height/2)),
+        y: (s.y != null ? s.y : (root && root.y != null ? root.y : 0))
+      };
+    }
+
+    function update(source) {
+      try {
+        if (!root) return;
+        // compute the new tree layout
+        const nodes = tree(root);
+        const nodesArray = (nodes && nodes.descendants ? nodes.descendants() : []).filter(Boolean);
+        const links = nodesArray.slice(1);
+
+        // fixed depth
+        nodesArray.forEach(d => d.y = d.depth * 160);
+
+        const sCoords = sourceCoords(source);
+
+        // Nodes data join with safe key
+        const node = g.selectAll('g.node').data(nodesArray, d => safeUID(d));
+
+        const nodeEnter = node.enter().append('g')
+          .attr('class', 'node')
+          .attr('transform', d => `translate(${sCoords.y0},${sCoords.x0})`)
+          .on('click', (event, d) => onClickNode(d));
+
+        nodeEnter.append('circle')
+          .attr('r', 1e-6)
+          .style('fill', d => (d && d._children) ? '#ffa' : '#fff');
+
+        nodeEnter.append('text')
+          .attr('dy', 3)
+          .attr('x', d => (d && (d.children || d._children)) ? -10 : 10)
+          .attr('text-anchor', d => (d && (d.children || d._children)) ? 'end' : 'start')
+          .text(d => {
+            if (!d || !d.data) return '(unknown)';
+            return `${d.data.canonicalName || d.data.scientificName || d.data.name || '(no name)'} ${d.data.rank ? '('+d.data.rank.toLowerCase()+')' : ''}`;
+          })
+          .clone(true).lower();
+
+        // Transition nodes to their new position
+        const nodeUpdate = nodeEnter.merge(node);
+
+        nodeUpdate.transition()
+          .duration(320)
+          .attr('transform', d => `translate(${d.y},${d.x})`);
+
+        nodeUpdate.select('circle').attr('r', 6).style('fill', d => (d && d._children) ? '#ffd27f' : '#fff');
+
+        // Remove old nodes
+        const nodeExit = node.exit().transition()
+          .duration(200)
+          .attr('transform', d => `translate(${sCoords.y},${sCoords.x})`)
+          .remove();
+
+        nodeExit.select('circle').attr('r', 1e-6);
+        nodeExit.select('text').style('fill-opacity', 1e-6);
+
+        // Links
+        const link = g.selectAll('path.link').data(links, d => safeUID(d) + '_link');
+
+        const linkEnter = link.enter().insert('path', 'g')
+          .attr('class', 'link')
+          .attr('d', d => {
+            const o = { x: sCoords.x0, y: sCoords.y0 };
+            return diagonal(o, o);
+          });
+
+        const linkUpdate = linkEnter.merge(link);
+
+        linkUpdate.transition().duration(320).attr('d', d => diagonal(d, d.parent));
+
+        const linkExit = link.exit().transition()
+          .duration(200)
+          .attr('d', d => {
+            const o = { x: sCoords.x, y: sCoords.y };
+            return diagonal(o, o);
+          })
+          .remove();
+
+        // stash positions
+        nodesArray.forEach(d => { if (d) { d.x0 = d.x; d.y0 = d.y; } });
+
+      } catch (err) {
+        console.error('Update failed:', err);
+        setStatus('Update error: ' + (err && err.message ? err.message : err));
+      }
+    }
+
+    function diagonal(s, d) {
+      const sy = (s && s.y != null) ? s.y : 0;
+      const dy = (d && d.y != null) ? d.y : 0;
+      const sx = (s && s.x != null) ? s.x : 0;
+      const dx = (d && d.x != null) ? d.x : 0;
+      return `M ${sy} ${sx} C ${(sy + dy) / 2} ${sx}, ${(sy + dy) / 2} ${dx}, ${dy} ${dx}`;
+    }
+
+    // Click handler: expand/collapse and lazy-load children from GBIF when needed
+    async function onClickNode(d) {
+      if (!d) return;
+
+      // If it's a d3 node, toggle children
+      try {
+        if (d.children) {
+          d._children = d.children;
+          d.children = null;
+          update(d);
+          return;
+        }
+
+        if (d._children) {
+          d.children = d._children;
+          d._children = null;
+          update(d);
+          return;
+        }
+
+        // If node has a GBIF key, fetch its children
+        const key = (d.data && (d.data.key || d.data.taxonKey || d.data.gbifKey || d.data.nubKey));
+        if (!key) {
+          // no numeric key: show message (node may be placeholder)
+          setStatus('No taxon key available for this node to fetch children.', true);
+          setTimeout(() => setStatus('', false), 2400);
+          return;
+        }
+
+        // Visual cue
+        d._children = [];
+        update(d);
+
+        const children = await fetchChildrenGBIF(key);
+        if (children && children.length) {
+          d.children = children.map(c => ({
+            key: c.key,
+            canonicalName: c.canonicalName || c.scientificName || c.name,
+            scientificName: c.scientificName,
+            rank: c.rank,
+            status: c.taxonomicStatus
+          }));
+        } else {
+          d._children = null;
+          d.children = null;
+          d.data._leaf = true;
+        }
+        update(d);
+      } catch (err) {
+        console.error('onClickNode error', err);
+        setStatus('Fetch error: ' + (err && err.message ? err.message : err));
+        setTimeout(() => setStatus('', false), 4000);
+      }
+    }
+
+    async function fetchChildrenGBIF(key, limit = 200) {
+      const url = `${GBIF_BASE}/species/${encodeURIComponent(key)}/children?limit=${limit}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const json = await resp.json();
+      return json.results || [];
+    }
+
+    function init() {
+      document.getElementById('searchBtn').addEventListener('click', onSearch);
+      document.getElementById('resetBtn').addEventListener('click', () => {
+        root = d3.hierarchy({ key: ROOT_KEY, canonicalName: 'Animalia', rank: 'KINGDOM' }, d => d.children);
+        root.x0 = height / 2; root.y0 = 0; root.children = null;
+        // clear transform
+        svg.transition().duration(300).call( d3.zoom().transform, d3.zoomIdentity.translate(40,20).scale(1) );
+        update(root);
+      });
+
+      document.getElementById('demoBtn').addEventListener('click', () => {
+        // simple offline demo dataset (useful as a test case)
+        const demo = {
+          key: ROOT_KEY,
+          canonicalName: 'Animalia',
+          rank: 'KINGDOM',
+          children: [
+            { key: 3359, canonicalName: 'Chordata', rank: 'PHYLUM', children: [
+              { key: 7742, canonicalName: 'Mammalia', rank: 'CLASS', children: [
+                { key: 9604, canonicalName: 'Primates', rank: 'ORDER' },
+                { key: 9684, canonicalName: 'Carnivora', rank: 'ORDER' }
+              ]},
+              { key: 3364, canonicalName: 'Arthropoda', rank: 'PHYLUM' }
+            ]},
+            { key: 3358, canonicalName: 'Porifera', rank: 'PHYLUM' }
+          ]
+        };
+        root = d3.hierarchy(demo, d => d.children);
+        root.x0 = height/2; root.y0 = 0;
+        update(root);
+      });
+
+      update(root);
+    }
+
+    // --- Search helpers ---
+    async function onSearch() {
+      const q = (document.getElementById('search').value || '').trim();
+      if (!q) return alert('Type a taxon name to search');
+      try {
+        setStatus('Searching...', true);
+        const matchUrl = `${GBIF_BASE}/species/search?q=${encodeURIComponent(q)}&limit=10`;
+        const resp = await fetch(matchUrl);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        if (!data.results || data.results.length === 0) return alert('No matches found');
+        const match = data.results[0];
+        const path = await buildPathToRoot(match);
+        await expandPath(path.reverse());
+        setStatus('', false);
+      } catch (err) {
+        console.error('Search failed', err);
+        setStatus('Search failed: ' + (err.message || err), true);
+        setTimeout(() => setStatus('', false), 4000);
+      }
+    }
+
+    async function buildPathToRoot(taxon) {
+      const path = [taxon];
+      let current = taxon;
+      while (current && current.parentKey && current.parentKey !== ROOT_KEY) {
+        try {
+          const resp = await fetch(`${GBIF_BASE}/species/${current.parentKey}`);
+          if (!resp.ok) break;
+          const parent = await resp.json();
+          path.push(parent);
+          current = parent;
+        } catch (err) { break; }
+      }
+      if (!path.some(p => p.key === ROOT_KEY)) {
+        path.push({ key: ROOT_KEY, canonicalName: 'Animalia', rank: 'KINGDOM' });
+      }
+      return path;
+    }
+
+    async function expandPath(path) {
+      // Attempt to expand nodes along the path (from root to target). This is best-effort.
+      let node = root;
+      for (const step of path) {
+        if (!node) break;
+        if (!node.children && !node._children) {
+          const key = node.data && (node.data.key || node.data.taxonKey || node.data.nubKey);
+          if (key) {
+            try {
+              const children = await fetchChildrenGBIF(key);
+              node.children = (children || []).map(c => ({ key: c.key, canonicalName: c.canonicalName || c.scientificName || c.name, rank: c.rank, scientificName: c.scientificName }));
+              update(node);
+            } catch (err) {
+              console.warn('Failed to load children for', key, err);
+            }
+          }
+        }
+        const nameToMatch = (step && (step.canonicalName || step.scientificName || step.name)) || '';
+        const child = (node.children || []).find(c => ((c.canonicalName || c.scientificName || c.name) || '').toLowerCase() === nameToMatch.toLowerCase());
+        if (child) {
+          // find the actual d3 node that matches this child within the current hierarchy
+          // If not found, create a temporary d3.hierarchy for the child so update can position it.
+          let found = null;
+          if (node.children) {
+            // Try to find existing child in node's children d3 nodes
+            // We search the tree's descendants for matching key
+            const descendants = root.descendants ? root.descendants() : [];
+            found = descendants.find(d => d && d.data && d.data.key === child.key);
+          }
+          if (found) node = found;
+          else node = d3.hierarchy(child, d => d.children);
+        } else {
+          const byKey = (node.children || []).find(c => c.key === step.key);
+          if (byKey) node = d3.hierarchy(byKey, d => d.children);
+          else break;
+        }
+      }
+      update(root);
+    }
+
+    // Run
+    init();
+
+  </script>
+</body>
+</html>
