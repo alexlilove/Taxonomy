@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Таксономическое дерево животных</title>
+<style>
+  body {
+    margin:0; padding:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+      Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+    background: #fafafa;
+    overflow-x: auto;
+    user-select: none;
+  }
+  h1 {
+    text-align: center;
+    margin: 12px 0 8px 0;
+    font-weight: 600;
+    color: #2c3e50;
+  }
+  svg {
+    display: block;
+    margin: auto;
+    max-width: 98vw;
+    height: 80vh;
+  }
+  .node circle {
+    fill: #3498db;
+    cursor: pointer;
+    transition: fill 0.3s ease;
+  }
+  .node text {
+    font-size: 12px;
+    pointer-events: none;
+    fill: #2c3e50;
+    user-select: none;
+  }
+  .node:hover circle {
+    fill: #2980b9;
+  }
+  .link {
+    fill: none;
+    stroke: #bdc3c7;
+    stroke-width: 2px;
+  }
+  .tooltip {
+    position: absolute;
+    background: #2c3e50cc;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    max-width: 280px;
+    pointer-events: none;
+    box-shadow: 0 0 10px #00000044;
+    transition: opacity 0.3s ease;
+    opacity: 0;
+    z-index: 1000;
+  }
+</style>
+</head>
+<body>
+<h1>Таксономическое дерево животных</h1>
+<svg></svg>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+(() => {
+  const data = {
+    name: "Животные (Animalia)",
+    description: "Царство животных — многоклеточные эукариоты.",
+    children: [
+      {
+        name: "Тип: Хордовые (Chordata)",
+        description: "Животные с хордами на какой-то стадии развития.",
+        children: [
+          {
+            name: "Класс: Млекопитающие (Mammalia)",
+            description: "Теплокровные животные с шерстью и молочными железами.",
+            children: [
+              {
+                name: "Отряд: Хищные (Carnivora)",
+                description: "Млекопитающие, преимущественно плотоядные.",
+                children: [
+                  {
+                    name: "Семейство: Кошачьи (Felidae)",
+                    description: "Семейство хищных животных — кошки.",
+                    children: [
+                      {
+                        name: "Род: Panthera",
+                        description: "Род крупных кошек, включающий львов и тигров.",
+                        children: [
+                          {
+                            name: "Вид: Panthera leo (Лев)",
+                            description: "Крупный хищник, обитающий в Африке и Индии."
+                          },
+                          {
+                            name: "Вид: Panthera tigris (Тигр)",
+                            description: "Крупный полосатый хищник из Азии."
+                          }
+                        ]
+                      },
+                      {
+                        name: "Род: Felis",
+                        description: "Род малых кошек.",
+                        children: [
+                          {
+                            name: "Вид: Felis catus (Домашняя кошка)",
+                            description: "Одомашненная мелкая кошка."
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    name: "Семейство: Псовые (Canidae)",
+                    description: "Семейство собак, лис, волков.",
+                    children: [
+                      {
+                        name: "Род: Canis",
+                        description: "Волки и собаки.",
+                        children: [
+                          {
+                            name: "Вид: Canis lupus (Волк)",
+                            description: "Дикий предок домашней собаки."
+                          },
+                          {
+                            name: "Вид: Canis lupus familiaris (Домашняя собака)",
+                            description: "Одомашненная собака."
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            name: "Класс: Птицы (Aves)",
+            description: "Теплокровные позвоночные с перьями.",
+            children: [
+              {
+                name: "Отряд: Воробьинообразные (Passeriformes)",
+                description: "Самый большой отряд птиц.",
+                children: [
+                  {
+                    name: "Семейство: Воробьиные (Passeridae)",
+                    description: "Маленькие певчие птицы.",
+                    children: [
+                      {
+                        name: "Род: Passer",
+                        description: "Воробьи.",
+                        children: [
+                          {
+                            name: "Вид: Passer domesticus (Домовой воробей)",
+                            description: "Распространённая мелкая птица."
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+
+  // Константы размера и отступов
+  const svg = document.querySelector("svg");
+  const width = window.innerWidth * 0.98;
+  const height = window.innerHeight * 0.8;
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+
+  const nodeRadius = 7;
+  const horizontalGap = 180; // расстояние по горизонтали между уровнями
+  const verticalGap = 50; // минимальное расстояние между узлами по вертикали
+
+  // Для удобства мы создадим плоский список узлов с координатами
+  let nodes = [];
+  let links = [];
+
+  // Шаг 1: Обход дерева и вычисление позиции узлов
+  // Вычисляем Y для листьев, потом поднимаемся вверх
+  // Подход: в глубину, пронумеровать листья, расположить по Y
+  let leafY = 20;
+  function layout(node, depth) {
+    node.depth = depth;
+    if (!node.children || node.children.length === 0) {
+      node.y = leafY;
+      leafY += verticalGap;
+    } else {
+      node.children.forEach(c => layout(c, depth + 1));
+      node.y = node.children.reduce((acc, c) => acc + c.y, 0) / node.children.length;
+    }
+    node.x = depth * horizontalGap + 40;
+  }
+  layout(data, 0);
+
+  // Шаг 2: Собираем списки узлов и связей
+  function collectNodes(node) {
+    nodes.push(node);
+    if (node.children) {
+      node.children.forEach(c => {
+        links.push({ source: node, target: c });
+        collectNodes(c);
+      });
+    }
+  }
+  collectNodes(data);
+
+  // Создадим элементы SVG для связей и узлов
+  function createLinkElement(link) {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    line.setAttribute("class", "link");
+    // Соединяем центр круга (x,y) прямой кривой без изгибов (лучше — с изгибом)
+    // Создадим кривую Безье для плавности
+    const startX = link.source.x + nodeRadius;
+    const startY = link.source.y;
+    const endX = link.target.x - nodeRadius;
+    const endY = link.target.y;
+    const dx = (endX - startX) / 2;
+
+    const d = `M${startX},${startY} C${startX + dx},${startY} ${endX - dx},${endY} ${endX},${endY}`;
+    line.setAttribute("d", d);
+    return line;
+  }
+
+  // Создаем группу для узлов и связей
+  const linkGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  const nodeGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  svg.appendChild(linkGroup);
+  svg.appendChild(nodeGroup);
+
+  links.forEach(link => {
+    linkGroup.appendChild(createLinkElement(link));
+  });
+
+  // Подсказка
+  const tooltip = document.getElementById("tooltip");
+
+  // Для мобильных — тапы, для десктопа — наведение мыши
+  function showTooltip(e, text) {
+    tooltip.style.opacity = 1;
+    tooltip.innerText = text;
+    const padding = 8;
+    const boxWidth = tooltip.offsetWidth;
+    const boxHeight = tooltip.offsetHeight;
+    let x, y;
+
+    if (e.touches && e.touches.length > 0) {
+      x = e.touches[0].clientX + padding;
+      y = e.touches[0].clientY + padding;
+    } else {
+      x = e.clientX + padding;
+      y = e.clientY + padding;
+    }
+
+    // Ограничим положение по окну
+    if (x + boxWidth > window.innerWidth) {
+      x -= boxWidth + 2 * padding;
+    }
+    if (y + boxHeight > window.innerHeight) {
+      y -= boxHeight + 2 * padding;
+    }
+
+    tooltip.style.left = x + "px";
+    tooltip.style.top = y + "px";
+  }
+  function hideTooltip() {
+    tooltip.style.opacity = 0;
+  }
+
+  // Создаем элементы узлов
+  nodes.forEach(node => {
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "node");
+    g.setAttribute("transform", `translate(${node.x},${node.y})`);
+    // Круг
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("r", nodeRadius);
+    g.appendChild(circle);
+
+    // Текст справа от круга
+    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    text.setAttribute("x", nodeRadius + 6);
+    text.setAttribute("y", 4);
+    text.textContent = node.name;
+    g.appendChild(text);
+
+    // Обработка событий для подсказки
+    g.addEventListener("mouseenter", e => showTooltip(e, node.description));
+    g.addEventListener("mousemove", e => showTooltip(e, node.description));
+    g.addEventListener("mouseleave", hideTooltip);
+
+    // Для сенсорных устройств — тапы
+    g.addEventListener("touchstart", e => {
+      e.stopPropagation();
+      showTooltip(e, node.description);
+    });
+
+    nodeGroup.appendChild(g);
+  });
+
+  // Скрыть подсказку при клике вне
+  document.body.addEventListener("touchstart", e => {
+    if (tooltip.style.opacity !== "0") {
+      hideTooltip();
+    }
+  });
+  document.body.addEventListener("click", e => {
+    if (tooltip.style.opacity !== "0") {
+      hideTooltip();
+    }
+  });
+
+  // При ресайзе окна меняем размер SVG
+  window.addEventListener("resize", () => {
+    const w = window.innerWidth * 0.98;
+    const h = window.innerHeight * 0.8;
+    svg.setAttribute("width", w);
+    svg.setAttribute("height", h);
+  });
+})();
+</script>
+</body>
+</html>
